@@ -7,13 +7,10 @@ resource "azurerm_resource_group" "example" {
 
 resource "azurerm_role_assignment" "dns_contributor" {
   principal_id = "ecf3e49e-4cbf-4eba-aa8a-eaf6cbc424e4"
-  #principal_id = data.azurerm_client_config.current.object_id
+  #principal_id = data.azurerm_client_config.current.object_id   ##TODO FIX THIS
   role_definition_name = "DNS Zone Contributor"
-  #scope                  = "/subscriptions/e7d1e315-ea53-4f0d-ab58-30278e3504c0/resourceGroups/example-resources"
   scope = azurerm_resource_group.example.id
 }
-
-
 
 # Azure Container Registry
 resource "azurerm_container_registry" "this" {
