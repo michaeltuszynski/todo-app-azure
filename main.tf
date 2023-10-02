@@ -1,7 +1,19 @@
+data "azurerm_client_config" "current" {}
+
 resource "azurerm_resource_group" "example" {
   name     = "example-resources"
   location = "East US"
 }
+
+resource "azurerm_role_assignment" "dns_contributor" {
+  principal_id = "ecf3e49e-4cbf-4eba-aa8a-eaf6cbc424e4"
+  #principal_id = data.azurerm_client_config.current.object_id
+  role_definition_name = "DNS Zone Contributor"
+  #scope                  = "/subscriptions/e7d1e315-ea53-4f0d-ab58-30278e3504c0/resourceGroups/example-resources"
+  scope = azurerm_resource_group.example.id
+}
+
+
 
 # Azure Container Registry
 resource "azurerm_container_registry" "this" {
@@ -109,6 +121,11 @@ resource "azurerm_application_gateway" "example" {
     capacity = 2
   }
 
+  ssl_policy {
+    policy_type = "Predefined"
+    policy_name = "AppGwSslPolicy20170401S"
+  }
+
   probe {
     name                = "aci-health-probe"
     protocol            = "Http"
@@ -127,8 +144,15 @@ resource "azurerm_application_gateway" "example" {
   }
 
   frontend_port {
-    name = "frontend-port"
-    port = 80
+    name = "frontend-port-https"
+    #port = 80
+    port = 443
+  }
+
+  ssl_certificate {
+    name     = "miketuszynski-info-certificate"
+    data     = azurerm_key_vault_certificate.import.certificate.0.contents
+    password = ""
   }
 
   frontend_ip_configuration {
@@ -150,18 +174,35 @@ resource "azurerm_application_gateway" "example" {
     probe_name            = "aci-health-probe"
   }
 
+  # http_listener {
+  #   name                           = "http-listener"
+  #   protocol                       = "Http"
+  #   frontend_ip_configuration_name = "frontend-ip-configuration"
+  #   frontend_port_name             = "frontend-port-http"
+  # }
+
   http_listener {
-    name                           = "http-listener"
-    protocol                       = "Http"
+    name                           = "https-listener"
     frontend_ip_configuration_name = "frontend-ip-configuration"
-    frontend_port_name             = "frontend-port"
+    frontend_port_name             = "frontend-port-https"
+    protocol                       = "Https"
+    ssl_certificate_name           = "miketuszynski-info-certificate"
   }
 
+  # request_routing_rule {
+  #   name                       = "http-request-routing-rule"
+  #   priority                   = 1
+  #   rule_type                  = "Basic"
+  #   http_listener_name         = "http-listener"
+  #   backend_address_pool_name  = "backend-address-pool"
+  #   backend_http_settings_name = "backend-http-settings"
+  # }
+
   request_routing_rule {
-    name                       = "http-request-routing-rule"
+    name                       = "https-request-routing-rule"
     priority                   = 1
     rule_type                  = "Basic"
-    http_listener_name         = "http-listener"
+    http_listener_name         = "https-listener"
     backend_address_pool_name  = "backend-address-pool"
     backend_http_settings_name = "backend-http-settings"
   }
@@ -179,7 +220,7 @@ resource "azurerm_network_security_group" "example" {
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
-    destination_port_range     = "80"
+    destination_port_range     = "443"
     source_address_prefix      = "*"
     destination_address_prefix = "*"
   }
@@ -251,7 +292,125 @@ resource "azurerm_monitor_diagnostic_setting" "example" {
 
 
 
+resource "random_pet" "example" {
+  length    = 2
+  separator = "-"
+}
 
-output "public_ip_address" {
-  value = azurerm_public_ip.example.ip_address
+resource "azurerm_key_vault" "example" {
+  name                = "keyvault-${random_pet.example.id}"
+  location            = azurerm_resource_group.example.location
+  resource_group_name = azurerm_resource_group.example.name
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  sku_name            = "standard"
+
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = data.azurerm_client_config.current.object_id
+
+    certificate_permissions = [
+      "Get", "List", "Delete", "Create", "Import", "Update", "ManageContacts", "GetIssuers", "ListIssuers", "SetIssuers", "DeleteIssuers", "ManageIssuers", "Recover", "Backup", "Restore", "Purge"
+    ]
+
+    key_permissions = [
+      "Get", "List", "Delete", "Create", "Import", "Update", "Recover", "Backup", "Restore", "Purge"
+    ]
+
+    secret_permissions = [
+      "Get", "List", "Delete", "Set", "Recover", "Backup", "Restore", "Purge"
+    ]
+  }
+
+  tags = {
+    environment = "testing"
+  }
+}
+
+resource "tls_private_key" "private_key" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "acme_registration" "reg" {
+  account_key_pem = tls_private_key.private_key.private_key_pem
+  email_address   = "miketuszynski42@gmail.com"
+}
+
+resource "acme_certificate" "cert" {
+  account_key_pem           = acme_registration.reg.account_key_pem
+  common_name               = "miketuszynski.info"
+  subject_alternative_names = ["www.miketuszynski.info"]
+
+  dns_challenge {
+    provider = "azure"
+    config = {
+      AZURE_CLIENT_ID       = var.client_id
+      AZURE_CLIENT_SECRET   = var.client_secret
+      AZURE_SUBSCRIPTION_ID = var.subscription_id
+      AZURE_TENANT_ID       = var.tenant_id
+      AZURE_RESOURCE_GROUP  = azurerm_resource_group.example.name
+    }
+  }
+}
+
+resource "azurerm_key_vault_certificate" "import" {
+  name         = "miketuszynski-info-certificate"
+  key_vault_id = azurerm_key_vault.example.id
+
+  certificate {
+    contents = acme_certificate.cert.certificate_p12
+    password = acme_certificate.cert.certificate_p12_password
+  }
+
+  certificate_policy {
+    issuer_parameters {
+      name = "Unknown"
+    }
+
+    key_properties {
+      exportable = true
+      key_type   = "RSA"
+      reuse_key  = true
+      key_size   = 2048
+    }
+
+    secret_properties {
+      content_type = "application/x-pkcs12"
+    }
+
+    x509_certificate_properties {
+      subject            = "CN=miketuszynski.info"
+      validity_in_months = 12
+      key_usage = [
+        "cRLSign",
+        "dataEncipherment",
+        "digitalSignature",
+        "keyEncipherment",
+        "keyAgreement",
+        "keyCertSign"
+      ]
+    }
+  }
+}
+
+data "azurerm_dns_zone" "example" {
+  name                = "miketuszynski.info"
+  resource_group_name = azurerm_resource_group.example.name
+}
+
+
+resource "azurerm_dns_a_record" "example" {
+  name                = "@" # "@" denotes the root domain
+  zone_name           = data.azurerm_dns_zone.example.name
+  resource_group_name = azurerm_resource_group.example.name
+  ttl                 = 300
+  records             = [azurerm_public_ip.example.ip_address]
+}
+
+resource "azurerm_dns_a_record" "www" {
+  name                = "www"
+  zone_name           = data.azurerm_dns_zone.example.name
+  resource_group_name = azurerm_resource_group.example.name
+  ttl                 = 300
+  records             = [azurerm_public_ip.example.ip_address]
 }
