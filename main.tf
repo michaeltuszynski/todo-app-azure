@@ -9,7 +9,7 @@ resource "azurerm_role_assignment" "dns_contributor" {
   principal_id = "ecf3e49e-4cbf-4eba-aa8a-eaf6cbc424e4"
   #principal_id = data.azurerm_client_config.current.object_id   ##TODO FIX THIS
   role_definition_name = "DNS Zone Contributor"
-  scope = azurerm_resource_group.example.id
+  scope                = azurerm_resource_group.example.id
 }
 
 # Azure Container Registry
@@ -65,6 +65,10 @@ resource "azurerm_subnet" "private" {
   }
 }
 
+locals {
+  parsed_credentials = jsondecode(azurerm_key_vault_secret.cosmosdb_credentials.value)
+}
+
 resource "azurerm_container_group" "example" {
   name                = "example-containergroup"
   location            = azurerm_resource_group.example.location
@@ -84,6 +88,15 @@ resource "azurerm_container_group" "example" {
     cpu    = "0.5"
     memory = "1.5"
 
+    environment_variables = {
+      COSMOSDB_USERNAME = local.parsed_credentials["username"],
+      COSMOSDB_PASSWORD = local.parsed_credentials["password"],
+      COSMOSDB_ENDPOINT  = local.parsed_credentials["endpoint"],
+      COSMOSDB_DATABASE = local.parsed_credentials["database"],
+      COSMOSDB_CONNECTION_STRING = local.parsed_credentials["connection_string"],
+      NODEPORT = "5000"
+    }
+
     ports {
       port     = 5000
       protocol = "TCP"
@@ -96,7 +109,7 @@ resource "azurerm_container_group" "example" {
 
   ip_address_type = "Private"
 
-  depends_on = [null_resource.push_image]
+  depends_on = [null_resource.push_image, azurerm_cosmosdb_account.example]
 }
 
 resource "azurerm_public_ip" "example" {
@@ -126,7 +139,7 @@ resource "azurerm_application_gateway" "example" {
   probe {
     name                = "aci-health-probe"
     protocol            = "Http"
-    path                = "/"
+    path                = "/health"
     port                = 5000
     host                = azurerm_container_group.example.ip_address
     interval            = 30 # Time interval between probes in seconds
@@ -287,8 +300,6 @@ resource "azurerm_monitor_diagnostic_setting" "example" {
   }
 }
 
-
-
 resource "random_pet" "example" {
   length    = 2
   separator = "-"
@@ -411,3 +422,50 @@ resource "azurerm_dns_a_record" "www" {
   ttl                 = 300
   records             = [azurerm_public_ip.example.ip_address]
 }
+
+
+
+resource "azurerm_cosmosdb_account" "example" {
+  name                = "example-cosmosdb"
+  location            = azurerm_resource_group.example.location
+  resource_group_name = azurerm_resource_group.example.name
+  offer_type          = "Standard"
+  kind                = "MongoDB"
+
+  consistency_policy {
+    consistency_level       = "Session"
+    max_interval_in_seconds = 10
+    max_staleness_prefix    = 200
+  }
+
+  geo_location {
+    location          = azurerm_resource_group.example.location
+    failover_priority = 0
+  }
+}
+
+resource "azurerm_cosmosdb_mongo_database" "example" {
+  name                = "example-mongo-db"
+  resource_group_name = azurerm_resource_group.example.name
+  account_name        = azurerm_cosmosdb_account.example.name
+}
+
+locals {
+  cosmosdb_credentials = jsonencode({
+    endpoint          = azurerm_cosmosdb_account.example.endpoint,
+    username          = azurerm_cosmosdb_account.example.name,
+    password          = azurerm_cosmosdb_account.example.primary_key,
+    database          = azurerm_cosmosdb_mongo_database.example.name,
+    connection_string = azurerm_cosmosdb_account.example.connection_strings[0]
+  })
+}
+
+
+resource "azurerm_key_vault_secret" "cosmosdb_credentials" {
+  name         = "cosmosdb-credentials"
+  value        = local.cosmosdb_credentials
+  key_vault_id = azurerm_key_vault.example.id
+}
+
+
+

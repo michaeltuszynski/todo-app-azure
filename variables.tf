@@ -25,7 +25,7 @@ variable "location" {
 variable "acr_name" {
   description = "Azure Container Registry Name"
   type        = string
-  default     = "simplenodempt"
+  default     = "todoappmpt"
 }
 
 variable "prefix" {
