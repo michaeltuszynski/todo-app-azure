@@ -4,34 +4,10 @@ variable "region" {
   default     = "East US"
 }
 
-variable "app" {
-  description = "Application that we want to deploy"
-  type        = string
-  default     = "myapp"
-}
-
-variable "env" {
-  description = "Application env"
-  type        = string
-  default     = "production"
-}
-
-variable "location" {
-  description = "Location short name "
-  type        = string
-  default     = "eastus"
-}
-
-variable "acr_name" {
-  description = "Azure Container Registry Name"
-  type        = string
-  default     = "todoappmpt"
-}
-
 variable "prefix" {
   description = "Prefix for all resources"
   type        = string
-  default     = "myapp"
+  default     = "todoapp"
 }
 
 variable "client_id" {
@@ -51,5 +27,46 @@ variable "subscription_id" {
 
 variable "tenant_id" {
   description = "Azure Tenant ID"
+  type        = string
+}
+
+variable "object_id" {
+  description = "Azure Object ID"
+  type        = string
+}
+
+variable "domain_name" {
+  description = "value of domain name"
+  type        = string
+}
+
+variable "subdomain" {
+  description = "value of subdomain"
+  type        = string
+  default     = "www"
+}
+
+variable "github_token" {
+  description = "Github Token"
+  type        = string
+}
+
+variable "github_username" {
+  description = "Github Username"
+  type        = string
+}
+
+variable "email_address" {
+  description = "Email Address"
+  type        = string
+}
+
+variable "repository_name_backend" {
+  description = "Github Repository Name"
+  type        = string
+}
+
+variable "repository_name_frontend" {
+  description = "Github Repository Name"
   type        = string
 }

@@ -1,59 +1,91 @@
 data "azurerm_client_config" "current" {}
 
-resource "azurerm_resource_group" "example" {
-  name     = "example-resources"
-  location = "East US"
+resource "azurerm_resource_group" "this" {
+  name     = "${var.prefix}-resources"
+  location = var.region
+}
+
+resource "azurerm_dns_zone" "this" {
+  name                = var.domain_name
+  resource_group_name = azurerm_resource_group.this.name
 }
 
 resource "azurerm_role_assignment" "dns_contributor" {
-  principal_id = "ecf3e49e-4cbf-4eba-aa8a-eaf6cbc424e4"
-  #principal_id = data.azurerm_client_config.current.object_id   ##TODO FIX THIS
+  principal_id         = var.object_id
   role_definition_name = "DNS Zone Contributor"
-  scope                = azurerm_resource_group.example.id
+  scope                = azurerm_resource_group.this.id
 }
 
 # Azure Container Registry
 resource "azurerm_container_registry" "this" {
-  name                = var.acr_name
-  resource_group_name = azurerm_resource_group.example.name
-  location            = azurerm_resource_group.example.location
+  name                = "${var.prefix}acr"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
   sku                 = "Basic"
   admin_enabled       = true
 }
 
-resource "null_resource" "push_image" {
-  provisioner "local-exec" {
-    command = <<EOT
-      docker login ${azurerm_container_registry.this.login_server} -u ${azurerm_container_registry.this.admin_username} -p ${azurerm_container_registry.this.admin_password}
-      docker tag ${var.acr_name}:latest ${azurerm_container_registry.this.login_server}/${var.acr_name}:v1
-      docker push ${azurerm_container_registry.this.login_server}/${var.acr_name}:v1
-    EOT
+# resource "null_resource" "push_image" {
+#   provisioner "local-exec" {
+#     command = <<EOT
+#       docker login ${azurerm_container_registry.this.login_server} -u ${azurerm_container_registry.this.admin_username} -p ${azurerm_container_registry.this.admin_password}
+#       docker tag ${var.prefix}acr:latest ${azurerm_container_registry.this.login_server}/${var.prefix}acr:v1
+#       docker push ${azurerm_container_registry.this.login_server}/${var.prefix}acr:v1
+#     EOT
+#   }
+
+#   triggers = {
+#     always_run = "${timestamp()}"
+#   }
+# }
+
+data "http" "dispatch_event_backend" {
+  url             = "https://api.github.com/repos/${var.github_username}/${var.repository_name_backend}/dispatches"
+  method          = "POST"
+
+  request_headers = {
+    Accept        = "application/vnd.github.everest-preview+json"
+    Authorization = "token ${var.github_token}"
   }
 
-  triggers = {
-    always_run = "${timestamp()}"
+  request_body = jsonencode({
+    event_type = "my-event"
+  })
+}
+
+data "http" "dispatch_event_frontend" {
+  url             = "https://api.github.com/repos/${var.github_username}/${var.repository_name_frontend}/dispatches"
+  method          = "POST"
+
+  request_headers = {
+    Accept        = "application/vnd.github.everest-preview+json"
+    Authorization = "token ${var.github_token}"
   }
+
+  request_body = jsonencode({
+    event_type = "my-event"
+  })
 }
 
 
-resource "azurerm_virtual_network" "example" {
-  name                = "example-network"
-  resource_group_name = azurerm_resource_group.example.name
-  location            = azurerm_resource_group.example.location
+resource "azurerm_virtual_network" "this" {
+  name                = "${var.prefix}-network"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
   address_space       = ["10.0.0.0/16"]
 }
 
 resource "azurerm_subnet" "public" {
   name                 = "public-subnet"
-  resource_group_name  = azurerm_resource_group.example.name
-  virtual_network_name = azurerm_virtual_network.example.name
+  resource_group_name  = azurerm_resource_group.this.name
+  virtual_network_name = azurerm_virtual_network.this.name
   address_prefixes     = ["10.0.1.0/24"]
 }
 
 resource "azurerm_subnet" "private" {
   name                 = "private-subnet"
-  resource_group_name  = azurerm_resource_group.example.name
-  virtual_network_name = azurerm_virtual_network.example.name
+  resource_group_name  = azurerm_resource_group.this.name
+  virtual_network_name = azurerm_virtual_network.this.name
   address_prefixes     = ["10.0.2.0/24"]
 
   delegation {
@@ -69,10 +101,10 @@ locals {
   parsed_credentials = jsondecode(azurerm_key_vault_secret.cosmosdb_credentials.value)
 }
 
-resource "azurerm_container_group" "example" {
-  name                = "example-containergroup"
-  location            = azurerm_resource_group.example.location
-  resource_group_name = azurerm_resource_group.example.name
+resource "azurerm_container_group" "this" {
+  name                = "${var.prefix}-containergroup"
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
   os_type             = "Linux"
   subnet_ids          = [azurerm_subnet.private.id]
 
@@ -83,18 +115,18 @@ resource "azurerm_container_group" "example" {
   }
 
   container {
-    name   = "example-container"
-    image  = "${azurerm_container_registry.this.login_server}/${var.acr_name}:v1"
+    name   = "${var.prefix}-container"
+    image  = "${azurerm_container_registry.this.login_server}/${var.prefix}acr:v1"
     cpu    = "0.5"
     memory = "1.5"
 
     environment_variables = {
-      COSMOSDB_USERNAME = local.parsed_credentials["username"],
-      COSMOSDB_PASSWORD = local.parsed_credentials["password"],
-      COSMOSDB_ENDPOINT  = local.parsed_credentials["endpoint"],
-      COSMOSDB_DATABASE = local.parsed_credentials["database"],
+      COSMOSDB_USERNAME          = local.parsed_credentials["username"],
+      COSMOSDB_PASSWORD          = local.parsed_credentials["password"],
+      COSMOSDB_ENDPOINT          = local.parsed_credentials["endpoint"],
+      COSMOSDB_DATABASE          = local.parsed_credentials["database"],
       COSMOSDB_CONNECTION_STRING = local.parsed_credentials["connection_string"],
-      NODEPORT = "5000"
+      NODEPORT                   = "5000"
     }
 
     ports {
@@ -103,27 +135,22 @@ resource "azurerm_container_group" "example" {
     }
   }
 
-  tags = {
-    environment = "testing"
-  }
-
   ip_address_type = "Private"
-
-  depends_on = [null_resource.push_image, azurerm_cosmosdb_account.example]
+  depends_on      = [azurerm_cosmosdb_account.this, acme_certificate.cert, data.http.dispatch_event_backend]
 }
 
-resource "azurerm_public_ip" "example" {
-  name                = "example-publicip"
-  location            = azurerm_resource_group.example.location
-  resource_group_name = azurerm_resource_group.example.name
+resource "azurerm_public_ip" "this" {
+  name                = "${var.prefix}-publicip"
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
   allocation_method   = "Static"
   sku                 = "Standard"
 }
 
-resource "azurerm_application_gateway" "example" {
-  name                = "example-appgateway"
-  location            = azurerm_resource_group.example.location
-  resource_group_name = azurerm_resource_group.example.name
+resource "azurerm_application_gateway" "this" {
+  name                = "${var.prefix}-appgateway"
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
 
   sku {
     name     = "Standard_v2"
@@ -141,7 +168,7 @@ resource "azurerm_application_gateway" "example" {
     protocol            = "Http"
     path                = "/health"
     port                = 5000
-    host                = azurerm_container_group.example.ip_address
+    host                = azurerm_container_group.this.ip_address
     interval            = 30 # Time interval between probes in seconds
     timeout             = 30 # Timeout for the probe in seconds
     unhealthy_threshold = 3  # Number of consecutive failures before marking as unhealthy
@@ -149,30 +176,29 @@ resource "azurerm_application_gateway" "example" {
 
 
   gateway_ip_configuration {
-    name      = "my-gateway-ip-configuration"
+    name      = "${var.prefix}-gateway-ip-configuration"
     subnet_id = azurerm_subnet.public.id
   }
 
   frontend_port {
     name = "frontend-port-https"
-    #port = 80
     port = 443
   }
 
   ssl_certificate {
-    name     = "miketuszynski-info-certificate"
+    name     = "${var.prefix}-domain-certificate"
     data     = azurerm_key_vault_certificate.import.certificate.0.contents
     password = ""
   }
 
   frontend_ip_configuration {
     name                 = "frontend-ip-configuration"
-    public_ip_address_id = azurerm_public_ip.example.id
+    public_ip_address_id = azurerm_public_ip.this.id
   }
 
   backend_address_pool {
     name  = "backend-address-pool"
-    fqdns = [azurerm_container_group.example.ip_address]
+    fqdns = [azurerm_container_group.this.ip_address]
   }
 
   backend_http_settings {
@@ -184,29 +210,13 @@ resource "azurerm_application_gateway" "example" {
     probe_name            = "aci-health-probe"
   }
 
-  # http_listener {
-  #   name                           = "http-listener"
-  #   protocol                       = "Http"
-  #   frontend_ip_configuration_name = "frontend-ip-configuration"
-  #   frontend_port_name             = "frontend-port-http"
-  # }
-
   http_listener {
     name                           = "https-listener"
     frontend_ip_configuration_name = "frontend-ip-configuration"
     frontend_port_name             = "frontend-port-https"
     protocol                       = "Https"
-    ssl_certificate_name           = "miketuszynski-info-certificate"
+    ssl_certificate_name           = "${var.prefix}-domain-certificate"
   }
-
-  # request_routing_rule {
-  #   name                       = "http-request-routing-rule"
-  #   priority                   = 1
-  #   rule_type                  = "Basic"
-  #   http_listener_name         = "http-listener"
-  #   backend_address_pool_name  = "backend-address-pool"
-  #   backend_http_settings_name = "backend-http-settings"
-  # }
 
   request_routing_rule {
     name                       = "https-request-routing-rule"
@@ -218,10 +228,10 @@ resource "azurerm_application_gateway" "example" {
   }
 }
 
-resource "azurerm_network_security_group" "example" {
-  name                = "example-nsg"
-  location            = azurerm_resource_group.example.location
-  resource_group_name = azurerm_resource_group.example.name
+resource "azurerm_network_security_group" "this" {
+  name                = "${var.prefix}-nsg"
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
 
   security_rule {
     name                       = "allow_appgateway_to_aci"
@@ -263,28 +273,28 @@ resource "azurerm_network_security_group" "example" {
 # Associate NSG with public subnet
 resource "azurerm_subnet_network_security_group_association" "public" {
   subnet_id                 = azurerm_subnet.public.id
-  network_security_group_id = azurerm_network_security_group.example.id
+  network_security_group_id = azurerm_network_security_group.this.id
 }
 
 # Associate NSG with private subnet
 resource "azurerm_subnet_network_security_group_association" "private" {
   subnet_id                 = azurerm_subnet.private.id
-  network_security_group_id = azurerm_network_security_group.example.id
+  network_security_group_id = azurerm_network_security_group.this.id
 }
 
 
-resource "azurerm_log_analytics_workspace" "example" {
-  name                = "example-workspace"
+resource "azurerm_log_analytics_workspace" "this" {
+  name                = "${var.prefix}-workspace"
   location            = "East US"
-  resource_group_name = azurerm_resource_group.example.name
+  resource_group_name = azurerm_resource_group.this.name
   sku                 = "PerGB2018"
   retention_in_days   = 30
 }
 
-resource "azurerm_monitor_diagnostic_setting" "example" {
-  name                       = "example-diagnostics"
-  target_resource_id         = azurerm_application_gateway.example.id
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.example.id
+resource "azurerm_monitor_diagnostic_setting" "this" {
+  name                       = "${var.prefix}-diagnostics"
+  target_resource_id         = azurerm_application_gateway.this.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
 
   enabled_log {
     category = "ApplicationGatewayAccessLog"
@@ -300,15 +310,15 @@ resource "azurerm_monitor_diagnostic_setting" "example" {
   }
 }
 
-resource "random_pet" "example" {
+resource "random_pet" "this" {
   length    = 2
   separator = "-"
 }
 
-resource "azurerm_key_vault" "example" {
-  name                = "keyvault-${random_pet.example.id}"
-  location            = azurerm_resource_group.example.location
-  resource_group_name = azurerm_resource_group.example.name
+resource "azurerm_key_vault" "this" {
+  name                = "${var.prefix}-kv"
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
   tenant_id           = data.azurerm_client_config.current.tenant_id
   sku_name            = "standard"
 
@@ -328,10 +338,12 @@ resource "azurerm_key_vault" "example" {
       "Get", "List", "Delete", "Set", "Recover", "Backup", "Restore", "Purge"
     ]
   }
+}
 
-  tags = {
-    environment = "testing"
-  }
+resource "azurerm_key_vault_secret" "api_key" {
+  name         = "deployment-secret"
+  value        = azurerm_static_site.this.api_key
+  key_vault_id = azurerm_key_vault.this.id
 }
 
 resource "tls_private_key" "private_key" {
@@ -341,13 +353,20 @@ resource "tls_private_key" "private_key" {
 
 resource "acme_registration" "reg" {
   account_key_pem = tls_private_key.private_key.private_key_pem
-  email_address   = "miketuszynski42@gmail.com"
+  email_address   = var.email_address
 }
 
 resource "acme_certificate" "cert" {
+  depends_on = [
+    azurerm_dns_zone.this,
+    azurerm_dns_a_record.this,
+    azurerm_key_vault_secret.cosmosdb_credentials,
+    acme_registration.reg
+  ]
+
   account_key_pem           = acme_registration.reg.account_key_pem
-  common_name               = "miketuszynski.info"
-  subject_alternative_names = ["www.miketuszynski.info"]
+  common_name               = var.domain_name
+  subject_alternative_names = ["${var.subdomain}.${var.domain_name}"]
 
   dns_challenge {
     provider = "azure"
@@ -356,14 +375,25 @@ resource "acme_certificate" "cert" {
       AZURE_CLIENT_SECRET   = var.client_secret
       AZURE_SUBSCRIPTION_ID = var.subscription_id
       AZURE_TENANT_ID       = var.tenant_id
-      AZURE_RESOURCE_GROUP  = azurerm_resource_group.example.name
+      AZURE_RESOURCE_GROUP  = azurerm_resource_group.this.name
     }
   }
 }
 
+# Wait for certificate to be issued
+# resource "null_resource" "wait" {
+#   triggers = {
+#     cert_id = acme_certificate.cert.certificate_url
+#   }
+
+#   provisioner "local-exec" {
+#     command = "sleep 120"
+#   }
+# }
+
 resource "azurerm_key_vault_certificate" "import" {
-  name         = "miketuszynski-info-certificate"
-  key_vault_id = azurerm_key_vault.example.id
+  name         = "${var.prefix}-domain-certificate"
+  key_vault_id = azurerm_key_vault.this.id
 
   certificate {
     contents = acme_certificate.cert.certificate_p12
@@ -387,7 +417,7 @@ resource "azurerm_key_vault_certificate" "import" {
     }
 
     x509_certificate_properties {
-      subject            = "CN=miketuszynski.info"
+      subject            = "CN=${var.domain_name}"
       validity_in_months = 12
       key_usage = [
         "cRLSign",
@@ -401,34 +431,18 @@ resource "azurerm_key_vault_certificate" "import" {
   }
 }
 
-data "azurerm_dns_zone" "example" {
-  name                = "miketuszynski.info"
-  resource_group_name = azurerm_resource_group.example.name
-}
-
-
-resource "azurerm_dns_a_record" "example" {
+resource "azurerm_dns_a_record" "this" {
   name                = "@" # "@" denotes the root domain
-  zone_name           = data.azurerm_dns_zone.example.name
-  resource_group_name = azurerm_resource_group.example.name
+  zone_name           = azurerm_dns_zone.this.name
+  resource_group_name = azurerm_resource_group.this.name
   ttl                 = 300
-  records             = [azurerm_public_ip.example.ip_address]
+  records             = [azurerm_public_ip.this.ip_address]
 }
 
-resource "azurerm_dns_a_record" "www" {
-  name                = "www"
-  zone_name           = data.azurerm_dns_zone.example.name
-  resource_group_name = azurerm_resource_group.example.name
-  ttl                 = 300
-  records             = [azurerm_public_ip.example.ip_address]
-}
-
-
-
-resource "azurerm_cosmosdb_account" "example" {
-  name                = "example-cosmosdb"
-  location            = azurerm_resource_group.example.location
-  resource_group_name = azurerm_resource_group.example.name
+resource "azurerm_cosmosdb_account" "this" {
+  name                = "${var.prefix}-cosmosdb"
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
   offer_type          = "Standard"
   kind                = "MongoDB"
 
@@ -439,33 +453,187 @@ resource "azurerm_cosmosdb_account" "example" {
   }
 
   geo_location {
-    location          = azurerm_resource_group.example.location
+    location          = azurerm_resource_group.this.location
     failover_priority = 0
   }
 }
 
-resource "azurerm_cosmosdb_mongo_database" "example" {
-  name                = "example-mongo-db"
-  resource_group_name = azurerm_resource_group.example.name
-  account_name        = azurerm_cosmosdb_account.example.name
+resource "azurerm_cosmosdb_mongo_database" "this" {
+  name                = "${var.prefix}-mongo-db"
+  resource_group_name = azurerm_resource_group.this.name
+  account_name        = azurerm_cosmosdb_account.this.name
 }
 
 locals {
   cosmosdb_credentials = jsonencode({
-    endpoint          = azurerm_cosmosdb_account.example.endpoint,
-    username          = azurerm_cosmosdb_account.example.name,
-    password          = azurerm_cosmosdb_account.example.primary_key,
-    database          = azurerm_cosmosdb_mongo_database.example.name,
-    connection_string = azurerm_cosmosdb_account.example.connection_strings[0]
+    endpoint          = azurerm_cosmosdb_account.this.endpoint,
+    username          = azurerm_cosmosdb_account.this.name,
+    password          = azurerm_cosmosdb_account.this.primary_key,
+    database          = azurerm_cosmosdb_mongo_database.this.name,
+    connection_string = azurerm_cosmosdb_account.this.connection_strings[0]
   })
 }
 
-
 resource "azurerm_key_vault_secret" "cosmosdb_credentials" {
-  name         = "cosmosdb-credentials"
+  name         = "${var.prefix}-cosmosdb-credentials"
   value        = local.cosmosdb_credentials
-  key_vault_id = azurerm_key_vault.example.id
+  key_vault_id = azurerm_key_vault.this.id
 }
 
+resource "azurerm_static_site" "this" {
+  name                = "${var.prefix}-static-site"
+  location            = "eastus2"
+  resource_group_name = azurerm_resource_group.this.name
+  sku_size            = "Standard"
+  sku_tier            = "Free"
+  depends_on          = [data.http.dispatch_event_frontend]
+}
 
+resource "azurerm_dns_cname_record" "this" {
+  depends_on          = [azurerm_dns_zone.this]
+  name                = var.subdomain
+  zone_name           = var.domain_name
+  resource_group_name = azurerm_resource_group.this.name
+  ttl                 = 300
+  record              = azurerm_static_site.this.default_host_name
+}
 
+resource "azurerm_static_site_custom_domain" "this" {
+  #depends_on      = [null_resource.wait]
+  static_site_id  = azurerm_static_site.this.id
+  domain_name     = "${azurerm_dns_cname_record.this.name}.${azurerm_dns_cname_record.this.zone_name}"
+  validation_type = "cname-delegation"
+}
+
+data "github_user" "current" {
+  username = var.github_username
+}
+
+provider "github" {
+  alias = "owner"
+  owner = var.github_username
+  token = var.github_token
+}
+
+data "github_actions_public_key" "backend_public_key" {
+  repository = var.repository_name_backend
+}
+
+data "github_actions_public_key" "frontend_public_key" {
+  repository = var.repository_name_frontend
+}
+
+resource "github_actions_secret" "deployment_secret" {
+  repository      = var.repository_name_frontend
+  secret_name     = "DEPLOYMENT_SECRET"
+  plaintext_value = azurerm_key_vault_secret.api_key.value
+  provider        = github.owner
+}
+
+resource "github_actions_secret" "acr_username" {
+  repository      = var.repository_name_backend
+  secret_name     = "ACR_USERNAME"
+  plaintext_value = azurerm_container_registry.this.admin_username
+  provider        = github.owner
+}
+
+resource "github_actions_secret" "acr_password" {
+  repository      = var.repository_name_backend
+  secret_name     = "ACR_PASSWORD"
+  plaintext_value = azurerm_container_registry.this.admin_password
+  provider        = github.owner
+}
+
+resource "github_repository_file" "frontend_workflow" {
+  depends_on = [azurerm_key_vault_secret.api_key, azurerm_static_site.this, github_actions_secret.deployment_secret]
+
+  overwrite_on_create = true
+  repository          = var.repository_name_frontend
+  file                = ".github/workflows/frontend.yml"
+  content             = <<-EOF
+    name: CI/CD Pipeline
+
+    on:
+      push:
+        branches:
+          - main
+
+    jobs:
+      build:
+        runs-on: ubuntu-latest
+
+        steps:
+        - name: Checkout code
+          uses: actions/checkout@v3
+
+        - name: Set up Node.js
+          uses: actions/setup-node@v3
+          with:
+            node-version: '18'
+
+        - name: Install dependencies
+          run: yarn install
+
+        - name: Build
+          run: yarn build
+
+        - name: Create config.json
+          run: |
+            echo '{
+              "REACT_APP_BACKEND_URL": "${var.domain_name}"
+            }' > build/config.json
+
+        - name: Deploy to Azure Static Web App
+          uses: azure/static-web-apps-deploy@v1
+          with:
+              azure_static_web_apps_api_token: $${{ secrets.DEPLOYMENT_SECRET }}
+              action: "upload"
+              app_location: "build"
+    EOF
+}
+
+resource "github_repository_file" "backend_workflow" {
+  depends_on = [azurerm_key_vault_secret.api_key,
+    azurerm_container_group.this,
+    azurerm_application_gateway.this,
+    azurerm_cosmosdb_account.this,
+    github_actions_secret.acr_username,
+    github_actions_secret.acr_password
+  ]
+
+  overwrite_on_create = true
+  repository          = var.repository_name_backend
+  branch              = "azure"
+  file                = ".github/workflows/backend.yml"
+  content             = <<-EOT
+    name: Push Docker image to custom registry
+
+    on:
+      push:
+        branches:
+          - azure
+
+    jobs:
+      push_to_registry:
+        name: Build and push Docker image
+        runs-on: ubuntu-latest
+        steps:
+          - name: Check out the repo
+            uses: actions/checkout@v2
+
+          - name: Log in to Docker registry
+            uses: azure/docker-login@v1
+            with:
+              login-server: ${azurerm_container_registry.this.login_server}
+              username: $${{ secrets.ACR_USERNAME }}
+              password: $${{ secrets.ACR_PASSWORD }}
+
+          - name: Build and push Docker image
+            uses: docker/build-push-action@v2
+            with:
+              context: .
+              file: ./Dockerfile
+              push: true
+              tags: ${azurerm_container_registry.this.login_server}/${var.prefix}acr:v1
+      EOT
+}

@@ -8,6 +8,9 @@ terraform {
       source  = "vancluever/acme"
       version = "~> 2.0"
     }
+    github = {
+      source = "integrations/github"
+    }
   }
 }
 
@@ -24,3 +27,8 @@ provider "acme" {
 }
 
 provider "azuread" {}
+
+provider "github" {
+  token = var.github_token
+  owner = var.github_username
+}
