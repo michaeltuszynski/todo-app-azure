@@ -23,3 +23,5 @@ terraform.rc
 
 .DS_Store
 *.zip
+*.log
+./scripts/*.log

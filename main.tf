@@ -1,4 +1,28 @@
 data "azurerm_client_config" "current" {}
+data "azuread_client_config" "current" {}
+
+# Create an Azure AD application
+resource "azuread_application" "this" {
+  display_name = "TerraformAcmeDnsChallengeAppService"
+}
+
+# Create a service principal for the Azure AD application
+resource "azuread_service_principal" "this" {
+  application_id = azuread_application.this.application_id
+}
+
+# Create a client secret for the Azure AD application
+resource "azuread_application_password" "this" {
+  application_object_id = azuread_application.this.object_id
+  end_date_relative     = "8760h" # Valid for 1 year
+}
+
+# Assign a role to the service principal
+resource "azurerm_role_assignment" "example" {
+  scope                = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
+  role_definition_name = "Contributor"
+  principal_id         = azuread_service_principal.this.object_id
+}
 
 resource "azurerm_resource_group" "this" {
   name     = "${var.prefix}-resources"
@@ -10,8 +34,24 @@ resource "azurerm_dns_zone" "this" {
   resource_group_name = azurerm_resource_group.this.name
 }
 
+locals {
+  output = [for ns in azurerm_dns_zone.this.name_servers : ns]
+}
+
+resource "null_resource" "pause_to_get_nameservers" {
+  depends_on = [ azurerm_dns_zone.this ]
+
+  provisioner "local-exec" {
+    when = create
+    command = "echo '#######NAMESERVERS:' && echo \"${join(", ", local.output)}\" && echo '#######'"
+  }
+  triggers = {
+    always_run = "${timestamp()}"
+  }
+}
+
 resource "azurerm_role_assignment" "dns_contributor" {
-  principal_id         = var.object_id
+  principal_id         = data.azurerm_client_config.current.object_id
   role_definition_name = "DNS Zone Contributor"
   scope                = azurerm_resource_group.this.id
 }
@@ -24,49 +64,6 @@ resource "azurerm_container_registry" "this" {
   sku                 = "Basic"
   admin_enabled       = true
 }
-
-# resource "null_resource" "push_image" {
-#   provisioner "local-exec" {
-#     command = <<EOT
-#       docker login ${azurerm_container_registry.this.login_server} -u ${azurerm_container_registry.this.admin_username} -p ${azurerm_container_registry.this.admin_password}
-#       docker tag ${var.prefix}acr:latest ${azurerm_container_registry.this.login_server}/${var.prefix}acr:v1
-#       docker push ${azurerm_container_registry.this.login_server}/${var.prefix}acr:v1
-#     EOT
-#   }
-
-#   triggers = {
-#     always_run = "${timestamp()}"
-#   }
-# }
-
-data "http" "dispatch_event_backend" {
-  url             = "https://api.github.com/repos/${var.github_username}/${var.repository_name_backend}/dispatches"
-  method          = "POST"
-
-  request_headers = {
-    Accept        = "application/vnd.github.everest-preview+json"
-    Authorization = "token ${var.github_token}"
-  }
-
-  request_body = jsonencode({
-    event_type = "my-event"
-  })
-}
-
-data "http" "dispatch_event_frontend" {
-  url             = "https://api.github.com/repos/${var.github_username}/${var.repository_name_frontend}/dispatches"
-  method          = "POST"
-
-  request_headers = {
-    Accept        = "application/vnd.github.everest-preview+json"
-    Authorization = "token ${var.github_token}"
-  }
-
-  request_body = jsonencode({
-    event_type = "my-event"
-  })
-}
-
 
 resource "azurerm_virtual_network" "this" {
   name                = "${var.prefix}-network"
@@ -136,7 +133,12 @@ resource "azurerm_container_group" "this" {
   }
 
   ip_address_type = "Private"
-  depends_on      = [azurerm_cosmosdb_account.this, acme_certificate.cert, data.http.dispatch_event_backend]
+  depends_on = [
+    azurerm_cosmosdb_account.this,
+    acme_certificate.cert,
+    azurerm_container_registry.this,
+    github_repository_file.backend_workflow
+  ]
 }
 
 resource "azurerm_public_ip" "this" {
@@ -346,6 +348,12 @@ resource "azurerm_key_vault_secret" "api_key" {
   key_vault_id = azurerm_key_vault.this.id
 }
 
+resource "azurerm_key_vault_secret" "client_app_service" {
+  name         = "client-secret"
+  value        = azuread_application_password.this.value
+  key_vault_id = azurerm_key_vault.this.id
+}
+
 resource "tls_private_key" "private_key" {
   algorithm = "RSA"
   rsa_bits  = 2048
@@ -356,40 +364,47 @@ resource "acme_registration" "reg" {
   email_address   = var.email_address
 }
 
+resource "azurerm_dns_txt_record" "this" {
+  name                = "_acme-challenge"
+  zone_name           = azurerm_dns_zone.this.name
+  resource_group_name = azurerm_resource_group.this.name
+  ttl                 = 120
+  record {
+    value = acme_registration.reg.registration_url
+  }
+}
+
+data "external" "dns_check" {
+  depends_on = [azurerm_dns_txt_record.this]
+
+  program = ["./scripts/check_dns_propagation.sh", "_acme-challenge.${var.domain_name}", acme_registration.reg.registration_url, "TXT"]
+}
+
 resource "acme_certificate" "cert" {
   depends_on = [
     azurerm_dns_zone.this,
     azurerm_dns_a_record.this,
-    azurerm_key_vault_secret.cosmosdb_credentials,
-    acme_registration.reg
+    acme_registration.reg,
+    azurerm_dns_cname_record.this,
+    data.external.dns_check
   ]
 
   account_key_pem           = acme_registration.reg.account_key_pem
   common_name               = var.domain_name
-  subject_alternative_names = ["${var.subdomain}.${var.domain_name}"]
+  subject_alternative_names = ["${var.subdomain}.${var.domain_name}", "${var.domain_name}", "frontend.${var.domain_name}"]
 
   dns_challenge {
     provider = "azure"
     config = {
-      AZURE_CLIENT_ID       = var.client_id
-      AZURE_CLIENT_SECRET   = var.client_secret
-      AZURE_SUBSCRIPTION_ID = var.subscription_id
-      AZURE_TENANT_ID       = var.tenant_id
       AZURE_RESOURCE_GROUP  = azurerm_resource_group.this.name
+      AZURE_CLIENT_ID       = azuread_application.this.application_id
+      AZURE_CLIENT_SECRET   = azuread_application_password.this.value
+      AZURE_SUBSCRIPTION_ID = data.azurerm_client_config.current.subscription_id
+      AZURE_TENANT_ID       = data.azuread_client_config.current.tenant_id
+
     }
   }
 }
-
-# Wait for certificate to be issued
-# resource "null_resource" "wait" {
-#   triggers = {
-#     cert_id = acme_certificate.cert.certificate_url
-#   }
-
-#   provisioner "local-exec" {
-#     command = "sleep 120"
-#   }
-# }
 
 resource "azurerm_key_vault_certificate" "import" {
   name         = "${var.prefix}-domain-certificate"
@@ -480,13 +495,18 @@ resource "azurerm_key_vault_secret" "cosmosdb_credentials" {
   key_vault_id = azurerm_key_vault.this.id
 }
 
+data "external" "dns_cname_check" {
+  depends_on = [azurerm_dns_cname_record.this]
+
+  program = ["./scripts/check_dns_propagation.sh", "www.${var.domain_name}", "${azurerm_static_site.this.default_host_name}.", "CNAME"]
+}
+
 resource "azurerm_static_site" "this" {
   name                = "${var.prefix}-static-site"
   location            = "eastus2"
   resource_group_name = azurerm_resource_group.this.name
   sku_size            = "Standard"
   sku_tier            = "Free"
-  depends_on          = [data.http.dispatch_event_frontend]
 }
 
 resource "azurerm_dns_cname_record" "this" {
@@ -499,10 +519,10 @@ resource "azurerm_dns_cname_record" "this" {
 }
 
 resource "azurerm_static_site_custom_domain" "this" {
-  #depends_on      = [null_resource.wait]
   static_site_id  = azurerm_static_site.this.id
   domain_name     = "${azurerm_dns_cname_record.this.name}.${azurerm_dns_cname_record.this.zone_name}"
   validation_type = "cname-delegation"
+  depends_on = [ data.external.dns_cname_check ]
 }
 
 data "github_user" "current" {
@@ -593,10 +613,7 @@ resource "github_repository_file" "frontend_workflow" {
 }
 
 resource "github_repository_file" "backend_workflow" {
-  depends_on = [azurerm_key_vault_secret.api_key,
-    azurerm_container_group.this,
-    azurerm_application_gateway.this,
-    azurerm_cosmosdb_account.this,
+  depends_on = [azurerm_container_registry.this,
     github_actions_secret.acr_username,
     github_actions_secret.acr_password
   ]
@@ -636,4 +653,36 @@ resource "github_repository_file" "backend_workflow" {
               push: true
               tags: ${azurerm_container_registry.this.login_server}/${var.prefix}acr:v1
       EOT
+}
+
+data "http" "dispatch_event_backend" {
+  url    = "https://api.github.com/repos/${var.github_username}/${var.repository_name_backend}/dispatches"
+  method = "POST"
+
+  request_headers = {
+    Accept        = "application/vnd.github.everest-preview+json"
+    Authorization = "token ${var.github_token}"
+  }
+
+  request_body = jsonencode({
+    event_type = "my-event"
+  })
+
+  depends_on = [github_repository_file.backend_workflow]
+}
+
+data "http" "dispatch_event_frontend" {
+  url    = "https://api.github.com/repos/${var.github_username}/${var.repository_name_frontend}/dispatches"
+  method = "POST"
+
+  request_headers = {
+    Accept        = "application/vnd.github.everest-preview+json"
+    Authorization = "token ${var.github_token}"
+  }
+
+  request_body = jsonencode({
+    event_type = "my-event"
+  })
+
+  depends_on = [github_repository_file.frontend_workflow]
 }
