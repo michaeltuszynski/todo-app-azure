@@ -34,22 +34,6 @@ resource "azurerm_dns_zone" "this" {
   resource_group_name = azurerm_resource_group.this.name
 }
 
-locals {
-  output = [for ns in azurerm_dns_zone.this.name_servers : ns]
-}
-
-resource "null_resource" "pause_to_get_nameservers" {
-  depends_on = [ azurerm_dns_zone.this ]
-
-  provisioner "local-exec" {
-    when = create
-    command = "echo '#######NAMESERVERS:' && echo \"${join(", ", local.output)}\" && echo '#######'"
-  }
-  triggers = {
-    always_run = "${timestamp()}"
-  }
-}
-
 resource "azurerm_role_assignment" "dns_contributor" {
   principal_id         = data.azurerm_client_config.current.object_id
   role_definition_name = "DNS Zone Contributor"
