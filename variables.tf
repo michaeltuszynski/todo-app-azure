@@ -45,3 +45,15 @@ variable "repository_name_frontend" {
   description = "Github Frontend Repository Name"
   type        = string
 }
+
+variable "repository_branch_frontend" {
+  description = "Github Frontend Repository Branch"
+  type        = string
+  default     = "main"
+}
+
+variable "repository_branch_backend" {
+  description = "Github Backend Repository Branch"
+  type        = string
+  default     = "main"
+}

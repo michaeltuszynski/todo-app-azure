@@ -553,6 +553,7 @@ resource "github_repository_file" "frontend_workflow" {
 
   overwrite_on_create = true
   repository          = var.repository_name_frontend
+  branch              = var.repository_branch_frontend
   file                = ".github/workflows/frontend.yml"
   content             = <<-EOF
     name: CI/CD Pipeline
@@ -560,7 +561,7 @@ resource "github_repository_file" "frontend_workflow" {
     on:
       push:
         branches:
-          - main
+          - ${var.repository_branch_frontend}
 
     jobs:
       build:
@@ -604,7 +605,7 @@ resource "github_repository_file" "backend_workflow" {
 
   overwrite_on_create = true
   repository          = var.repository_name_backend
-  branch              = "azure"
+  branch              = var.repository_branch_backend
   file                = ".github/workflows/backend.yml"
   content             = <<-EOT
     name: Push Docker image to custom registry
@@ -612,7 +613,7 @@ resource "github_repository_file" "backend_workflow" {
     on:
       push:
         branches:
-          - azure
+          - ${var.repository_branch_backend}
 
     jobs:
       push_to_registry:
