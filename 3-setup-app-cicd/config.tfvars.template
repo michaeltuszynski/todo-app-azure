@@ -1,0 +1,20 @@
+public_ip_id       = ""
+virtual_network    = ""
+public_subnet      = ""
+private_subnet     = ""
+container_registry = ""
+key_vault          = ""
+resource_group     = ""
+zone_name          = ""
+
+github_token             = ""
+github_username          = ""
+repository_name_frontend = ""
+repository_name_backend  = ""
+subdomain                = "www"
+
+repository_branch_frontend = "main"
+repository_branch_backend = "azure" #merge to main
+
+application_port = 5000
+prefix = ""

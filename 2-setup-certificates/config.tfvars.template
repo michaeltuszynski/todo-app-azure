@@ -1,0 +1,8 @@
+email_address  = ""
+key_vault      = ""
+resource_group = ""
+zone_name      = ""
+subdomain      = ""
+github_token             = ""
+github_username          = ""
+prefix = ""
