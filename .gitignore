@@ -25,3 +25,5 @@ terraform.rc
 *.zip
 *.log
 ./scripts/*.log
+
+.idea
