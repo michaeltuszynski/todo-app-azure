@@ -41,21 +41,6 @@ resource "acme_registration" "reg" {
   email_address   = var.email_address
 }
 
-resource "azurerm_dns_txt_record" "this" {
-  name                = "_acme-challenge"
-  zone_name           = data.azurerm_dns_zone.this.name
-  resource_group_name = data.azurerm_resource_group.this.name
-  ttl                 = 120
-  record {
-    value = acme_registration.reg.registration_url
-  }
-}
-
-data "external" "dns_check" {
-  depends_on = [azurerm_dns_txt_record.this]
-  program    = ["./scripts/check_dns_propagation.sh", "_acme-challenge.${data.azurerm_dns_zone.this.name}", acme_registration.reg.registration_url, "TXT"]
-}
-
 resource "acme_certificate" "cert" {
   depends_on = [
     data.azurerm_dns_zone.this,
@@ -72,7 +57,6 @@ resource "acme_certificate" "cert" {
     provider = "azure"
     config = {
       AZURE_RESOURCE_GROUP = data.azurerm_resource_group.this.name
-      #AZURE_CLIENT_ID       = var.application_id
       AZURE_CLIENT_ID       = data.azurerm_key_vault_secret.client_id.value
       AZURE_CLIENT_SECRET   = data.azurerm_key_vault_secret.client_secret.value
       AZURE_SUBSCRIPTION_ID = data.azurerm_client_config.current.subscription_id
@@ -122,4 +106,6 @@ resource "azurerm_key_vault_certificate" "domain_certificate" {
   }
 }
 
-
+data "external" "dns_check" {
+  program    = ["./scripts/check_dns_propagation.sh", "_acme-challenge.${data.azurerm_dns_zone.this.name}", acme_registration.reg.registration_url, "TXT"]
+}

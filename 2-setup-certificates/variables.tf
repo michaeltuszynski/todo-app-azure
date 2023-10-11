@@ -27,13 +27,3 @@ variable "subdomain" {
   description = "Subdomain"
   type        = string
 }
-
-variable "github_username" {
-  description = "GitHub Username"
-  type        = string
-}
-
-variable "github_token" {
-  description = "GitHub Repository Token"
-  type        = string
-}

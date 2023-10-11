@@ -16,6 +16,11 @@ resource "azuread_application_password" "this" {
   end_date_relative     = "8760h" # Valid for 1 year
 }
 
+resource "azurerm_resource_group" "this" {
+  name     = "${var.prefix}-resources"
+  location = var.region
+}
+
 resource "azurerm_key_vault" "this" {
   name                = "${var.prefix}-kv"
   location            = azurerm_resource_group.this.location
@@ -53,36 +58,26 @@ resource "azurerm_key_vault_secret" "client_id" {
   key_vault_id = azurerm_key_vault.this.id
 }
 
+resource "azurerm_user_assigned_identity" "this" {
+  name                = "${var.prefix}-identity"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+}
+
+resource "azurerm_key_vault_access_policy" "this" {
+  key_vault_id = azurerm_key_vault.this.id
+
+  tenant_id = azurerm_user_assigned_identity.this.tenant_id
+  object_id = azurerm_user_assigned_identity.this.principal_id
+
+  secret_permissions = ["Get"]
+}
+
 # Assign a role to the service principal
 resource "azurerm_role_assignment" "example" {
   scope                = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
   role_definition_name = "Contributor"
   principal_id         = azuread_service_principal.this.object_id
-}
-
-resource "azurerm_resource_group" "this" {
-  name     = "${var.prefix}-resources"
-  location = var.region
-}
-
-resource "azurerm_dns_zone" "this" {
-  name                = var.domain_name
-  resource_group_name = azurerm_resource_group.this.name
-}
-
-resource "azurerm_role_assignment" "dns_contributor" {
-  principal_id         = data.azurerm_client_config.current.object_id
-  role_definition_name = "DNS Zone Contributor"
-  scope                = azurerm_resource_group.this.id
-}
-
-# Azure Container Registry
-resource "azurerm_container_registry" "this" {
-  name                = "${var.prefix}acr"
-  resource_group_name = azurerm_resource_group.this.name
-  location            = azurerm_resource_group.this.location
-  sku                 = "Basic"
-  admin_enabled       = true
 }
 
 resource "azurerm_virtual_network" "this" {
@@ -176,10 +171,30 @@ resource "azurerm_public_ip" "this" {
   sku                 = "Standard"
 }
 
+resource "azurerm_dns_zone" "this" {
+  name                = var.domain_name
+  resource_group_name = azurerm_resource_group.this.name
+}
+
 resource "azurerm_dns_a_record" "this" {
   name                = "@" # "@" denotes the root domain
   zone_name           = azurerm_dns_zone.this.name
   resource_group_name = azurerm_resource_group.this.name
   ttl                 = 300
   records             = [azurerm_public_ip.this.ip_address]
+}
+
+resource "azurerm_role_assignment" "dns_contributor" {
+  principal_id         = data.azurerm_client_config.current.object_id
+  role_definition_name = "DNS Zone Contributor"
+  scope                = azurerm_resource_group.this.id
+}
+
+# Azure Container Registry
+resource "azurerm_container_registry" "this" {
+  name                = "${var.prefix}acr"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  sku                 = "Basic"
+  admin_enabled       = true
 }

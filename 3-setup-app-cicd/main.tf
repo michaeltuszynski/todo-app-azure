@@ -5,6 +5,11 @@ data "azurerm_resource_group" "this" {
   name = var.resource_group
 }
 
+data "azurerm_user_assigned_identity" "this" {
+  name                = "${var.prefix}-identity"
+  resource_group_name = data.azurerm_resource_group.this.name
+}
+
 data "azurerm_public_ip" "this" {
   name                = var.public_ip_id
   resource_group_name = data.azurerm_resource_group.this.name
@@ -40,10 +45,6 @@ data "azurerm_subnet" "private" {
 data "azurerm_container_registry" "this" {
   name                = var.container_registry
   resource_group_name = data.azurerm_resource_group.this.name
-}
-
-data "github_user" "current" {
-  username = var.github_username
 }
 
 data "github_actions_public_key" "backend_public_key" {
@@ -96,7 +97,7 @@ resource "azurerm_key_vault_secret" "cosmosdb_credentials" {
   key_vault_id = data.azurerm_key_vault.this.id
 }
 
-###Container Group
+###Container Account
 locals {
   parsed_credentials = jsondecode(azurerm_key_vault_secret.cosmosdb_credentials.value)
 }
@@ -144,21 +145,6 @@ resource "azurerm_container_group" "this" {
   ]
 }
 
-resource "azurerm_user_assigned_identity" "this" {
-  name                = "${var.prefix}-identity"
-  resource_group_name = data.azurerm_resource_group.this.name
-  location            = data.azurerm_resource_group.this.location
-}
-
-resource "azurerm_key_vault_access_policy" "example" {
-  key_vault_id = data.azurerm_key_vault.this.id
-
-  tenant_id = azurerm_user_assigned_identity.this.tenant_id
-  object_id = azurerm_user_assigned_identity.this.principal_id
-
-  secret_permissions = ["Get"]
-}
-
 resource "azurerm_application_gateway" "this" {
   name                = "${var.prefix}-appgateway"
   location            = data.azurerm_resource_group.this.location
@@ -166,13 +152,13 @@ resource "azurerm_application_gateway" "this" {
 
   identity {
     type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.this.id]
+    identity_ids = [data.azurerm_user_assigned_identity.this.id]
   }
 
   sku {
     name     = "Standard_v2"
     tier     = "Standard_v2"
-    capacity = 2
+    capacity = 1
   }
 
   ssl_policy {
@@ -244,7 +230,7 @@ resource "azurerm_application_gateway" "this" {
   }
 }
 
-
+##Frontend Static Site
 resource "azurerm_static_site" "this" {
   name                = "${var.prefix}-static-site"
   location            = "eastus2"
@@ -262,12 +248,6 @@ resource "azurerm_dns_cname_record" "this" {
   record              = azurerm_static_site.this.default_host_name
 }
 
-data "external" "dns_cname_check" {
-  depends_on = [azurerm_dns_cname_record.this]
-
-  program = ["./scripts/check_dns_propagation.sh", "www.${data.azurerm_dns_zone.this.name}", "${azurerm_static_site.this.default_host_name}.", "CNAME"]
-}
-
 resource "azurerm_static_site_custom_domain" "this" {
   static_site_id  = azurerm_static_site.this.id
   domain_name     = "${azurerm_dns_cname_record.this.name}.${azurerm_dns_cname_record.this.zone_name}"
@@ -281,7 +261,13 @@ resource "azurerm_key_vault_secret" "deployment_secret" {
   key_vault_id = data.azurerm_key_vault.this.id
 }
 
+data "external" "dns_cname_check" {
+  depends_on = [azurerm_dns_cname_record.this]
+  program    = ["./scripts/check_dns_propagation.sh", "www.${data.azurerm_dns_zone.this.name}", "${azurerm_static_site.this.default_host_name}.", "CNAME"]
+}
 
+
+##Github Actions CI/CD
 resource "github_actions_secret" "deployment_secret" {
   repository      = var.repository_name_frontend
   secret_name     = "DEPLOYMENT_SECRET"

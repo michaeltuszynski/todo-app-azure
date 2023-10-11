@@ -4,10 +4,6 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "=3.74.0"
     }
-    acme = {
-      source  = "vancluever/acme"
-      version = "~> 2.0"
-    }
     github = {
       source = "integrations/github"
     }
@@ -16,10 +12,6 @@ terraform {
 
 provider "azurerm" {
   features {}
-}
-
-provider "acme" {
-  server_url = "https://acme-v02.api.letsencrypt.org/directory"
 }
 
 provider "azuread" {}
