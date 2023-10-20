@@ -1,0 +1,38 @@
+name: Frontend Azure CI/CD Pipeline
+
+  on:
+    push:
+      branches:
+        - ${azure_branch}
+
+  jobs:
+    build:
+      runs-on: ubuntu-latest
+
+      steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: yarn install
+
+      - name: Build
+        run: yarn build
+
+      - name: Create config.json
+        run: |
+          echo '{
+            "REACT_APP_BACKEND_URL": "${}"
+          }' > build/config.json
+
+      - name: Deploy to Azure Static Web App
+        uses: azure/static-web-apps-deploy@v1
+        with:
+            azure_static_web_apps_api_token: $${{ secrets.DEPLOYMENT_SECRET }}
+            action: "upload"
+            app_location: "build"

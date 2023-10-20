@@ -293,46 +293,10 @@ resource "github_repository_file" "frontend_workflow" {
   repository          = var.repository_name_frontend
   branch              = var.repository_branch_frontend
   file                = ".github/workflows/frontend.yml"
-  content             = <<-EOF
-    name: CI/CD Pipeline
-
-    on:
-      push:
-        branches:
-          - ${var.repository_branch_frontend}
-
-    jobs:
-      build:
-        runs-on: ubuntu-latest
-
-        steps:
-        - name: Checkout code
-          uses: actions/checkout@v3
-
-        - name: Set up Node.js
-          uses: actions/setup-node@v3
-          with:
-            node-version: '18'
-
-        - name: Install dependencies
-          run: yarn install
-
-        - name: Build
-          run: yarn build
-
-        - name: Create config.json
-          run: |
-            echo '{
-              "REACT_APP_BACKEND_URL": "${data.azurerm_dns_zone.this.name}"
-            }' > build/config.json
-
-        - name: Deploy to Azure Static Web App
-          uses: azure/static-web-apps-deploy@v1
-          with:
-              azure_static_web_apps_api_token: $${{ secrets.DEPLOYMENT_SECRET }}
-              action: "upload"
-              app_location: "build"
-    EOF
+  content             = templatefile("yml/frontend-azure-cicd.yml", {
+    azure_branch = var.repository_branch_frontend
+    azure_service = data.azurerm_dns_zone.this.name
+  })
 }
 
 resource "github_repository_file" "backend_workflow" {
@@ -345,37 +309,11 @@ resource "github_repository_file" "backend_workflow" {
   repository          = var.repository_name_backend
   branch              = var.repository_branch_backend
   file                = ".github/workflows/backend.yml"
-  content             = <<-EOT
-    name: Push Docker image to custom registry
-
-    on:
-      push:
-        branches:
-          - ${var.repository_branch_backend}
-
-    jobs:
-      push_to_registry:
-        name: Build and push Docker image
-        runs-on: ubuntu-latest
-        steps:
-          - name: Check out the repo
-            uses: actions/checkout@v2
-
-          - name: Log in to Docker registry
-            uses: azure/docker-login@v1
-            with:
-              login-server: ${data.azurerm_container_registry.this.login_server}
-              username: $${{ secrets.ACR_USERNAME }}
-              password: $${{ secrets.ACR_PASSWORD }}
-
-          - name: Build and push Docker image
-            uses: docker/build-push-action@v2
-            with:
-              context: .
-              file: ./Dockerfile
-              push: true
-              tags: ${data.azurerm_container_registry.this.login_server}/${var.prefix}acr:v1
-      EOT
+  content             = templatefile("yml/backend-azure-cicd.yml", {
+    azure_branch = var.repository_branch_backend
+    azure_registry = data.azurerm_container_registry.this.login_server
+    azure_image = "${data.azurerm_container_registry.this.login_server}/${var.prefix}acr:v1"
+  })
 }
 
 data "http" "dispatch_event_backend" {
@@ -388,7 +326,7 @@ data "http" "dispatch_event_backend" {
   }
 
   request_body = jsonencode({
-    event_type = "my-event"
+    event_type = "start-event"
   })
 
   depends_on = [github_repository_file.backend_workflow]
@@ -404,7 +342,7 @@ data "http" "dispatch_event_frontend" {
   }
 
   request_body = jsonencode({
-    event_type = "my-event"
+    event_type = "start-event"
   })
 
   depends_on = [github_repository_file.frontend_workflow]
